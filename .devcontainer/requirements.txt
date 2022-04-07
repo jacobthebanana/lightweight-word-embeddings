@@ -1,0 +1,7 @@
+jupyter
+ipykernel
+tqdm
+tensorboard
+torch-tb-profiler
+numpy
+black
