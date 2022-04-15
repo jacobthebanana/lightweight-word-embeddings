@@ -1,12 +1,13 @@
 {
-    "name": "PyTorch",
-    "build": {
-      "dockerfile": "Dockerfile",
-    },
-    "runArgs": [
-      "--runtime=nvidia"
-    ],
-    "extensions": [
-      "ms-python.python"
-    ]
-  }
+  "name": "PyTorch",
+  "build": {
+    "dockerfile": "Dockerfile",
+  },
+  "runArgs": [
+    "--runtime=nvidia"
+  ],
+  "extensions": [
+    "ms-python.python"
+  ],
+  "shutdownAction": "none"
+}
