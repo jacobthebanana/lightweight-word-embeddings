@@ -64,6 +64,7 @@ for epoch in tqdm(range(n_epoch)):
 
         train_loss_tally += loss
 
+    train_loss_tally = train_loss_tally / train_ratio
     writer.add_scalar("Loss/Train", train_loss_tally, epoch)
 
     num_iterations = math.ceil((num_words * test_ratio) / batch_size)
@@ -85,6 +86,7 @@ for epoch in tqdm(range(n_epoch)):
             loss = criterion(Y_batch, Y_predictions)
             test_loss_tally += loss
 
+    test_loss_tally = test_loss_tally / test_ratio
     writer.add_scalar("Loss/Test", test_loss_tally, epoch)
     print(
         f"{epoch+1}: Train loss {train_loss_tally:.5f}, Test loss {test_loss_tally:.5f}"

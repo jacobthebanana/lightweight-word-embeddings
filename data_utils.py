@@ -89,11 +89,12 @@ def get_batch(
     - X_batch_padding_mask: 2D Tensor. (batch_size, l).
     - Y_batch: 2D array. (batch_size, d).
     """
-    start = 0
-
     X_sliced = X[start : (start + batch_size)]
-    Y_batch = Y[start : (start + batch_size), :]
     actual_batch_length = len(X_sliced)
+    if Y is not None:
+        Y_batch = Y[start : (start + batch_size), :]
+    else:  # Inference mode.
+        Y_batch = None
 
     embedding_dimension = X_sliced[0].shape[-1]
     max_word_length = max(map(len, X_sliced))
