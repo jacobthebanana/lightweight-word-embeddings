@@ -24,8 +24,12 @@ writer = SummaryWriter(filename_suffix=f"batch_{batch_size}")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("dataset_path")
+parser.add_argument(
+    "--train_percentage", dest="train_percentage", type=float, default=1, required=False
+)
 args = parser.parse_args()
 
+train_percentage = args.train_percentage
 dataset_path = args.dataset_path
 dataset = datasets.load_from_disk(dataset_path)
 
@@ -35,14 +39,14 @@ _, embeddings, word_lookup, word_list = data_utils.load_embedding_file(
 )
 output_dimension = embeddings.shape[1]
 
-train_length = len(dataset["train"])
-actual_train_length = train_length // 17
-
+truncated_training_dataset = dataset["train"].train_test_split(
+    train_size=train_percentage
+)["train"]
 train_dataloader = torch.utils.data.DataLoader(
-    dataset["train"][:actual_train_length], batch_size=batch_size
+    truncated_training_dataset, batch_size=batch_size
 )
 test_dataloader = torch.utils.data.DataLoader(dataset["test"], batch_size=batch_size)
-
+num_steps_per_epoch = len(truncated_training_dataset) // batch_size
 
 model = TransformerModel(
     input_dimension=input_dimension,
@@ -60,8 +64,10 @@ for epoch in tqdm(range(n_epoch)):
     model.train()
     train_loss_tally = 0
     words_processed = 0
+    step = 0
 
     for words in tqdm(train_dataloader):
+        step += 1
         X, X_length_mask, Y = data_utils.prepare_batch(
             words, embeddings, word_lookup, device=device
         )
@@ -75,6 +81,9 @@ for epoch in tqdm(range(n_epoch)):
 
         train_loss_tally += loss
         words_processed += Y.shape[0]
+
+        episode_loss = loss / Y.shape[0]
+        writer.add_scalar("Loss/Train (per episode)", episode_loss, step)
 
     train_loss_tally = train_loss_tally / words_processed
     writer.add_scalar("Loss/Train", train_loss_tally, epoch)

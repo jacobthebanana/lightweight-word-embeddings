@@ -96,7 +96,7 @@ def prepare_batch(
     """
     X_items = []
     Y_items = []
-    words = items["words"]
+    words = items["word"]
     for word in words:
         word_embedding_key = word_lookup.get(word)
 
