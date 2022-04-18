@@ -1,4 +1,5 @@
 import math
+import argparse
 
 import torch
 from tqdm.auto import tqdm
@@ -6,26 +7,35 @@ from tqdm.auto import tqdm
 from model import TransformerModel
 import data_utils
 
-data_file = "./data/glove.6B.100d.txt"
-input_dimension = 28
-output_dimension = 100
-nhead = 2
-nhid = 200
-nlayers = 2
-state_dict_path = f"models/batch_8192_189.pth"
+parser = argparse.ArgumentParser()
+parser.add_argument("word_list_file")
+parser.add_argument("model_path")
+parser.add_argument("nhead", type=int)
+parser.add_argument("nlayers_input", type=int)
+parser.add_argument("nlayers", type=int)
+parser.add_argument("output_dimension", type=int)
+args = parser.parse_args()
 
-batch_size = 8192
+data_file = args.word_list_file
+state_dict_path = args.model_path
+
+input_dimension = 28
+output_dimension = args.output_dimension
+nhead = args.nhead
+nlayers_input = args.nlayers_input
+nlayers = args.nlayers
+batch_size = 256
 device = torch.device("cuda")
 
 # List of word-character matricies.
-word_list, _ = data_utils.load_embedding_file(data_file, device=device, limit=-1)
+X, _, _, word_list = data_utils.load_embedding_file(data_file, device=device, limit=-1)
 num_words = len(word_list)
 
 model = TransformerModel(
     input_dimension=input_dimension,
     output_dimension=output_dimension,
     nhead=nhead,
-    nhid=nhid,
+    nlayers_input=nlayers_input,
     nlayers=nlayers,
     dropout=0.5,
 )
@@ -43,7 +53,7 @@ for iteration in tqdm(range(num_iterations)):
     head_index = batch_size * iteration
     tail_index = min(num_words, (head_index + batch_size))
     X_batch, X_length_mask, _ = data_utils.get_batch(
-        word_list,
+        X,
         None,  # No embedding is provided during inference.
         start=head_index,
         batch_size=batch_size,
@@ -56,12 +66,12 @@ for iteration in tqdm(range(num_iterations)):
 
 
 output = output.cpu().numpy()
-with open(f"data/predictions.{output_dimension}d.txt", "w") as output_file:
+with open(f"{args.model_path}.predictions.{output_dimension}d.txt", "w") as output_file:
     # Iterate over rows (words) of the 2D numpy array "output".
     for word_index, word_embedding in enumerate(tqdm(output)):
         word: str = word_list[word_index]
         word_embedding = tuple(map(str, word_embedding))
         word_embedding = " ".join(word_embedding)
 
-        output_line = f"word {word_embedding}\n"
+        output_line = f"{word} {word_embedding}\n"
         output_file.write(output_line)

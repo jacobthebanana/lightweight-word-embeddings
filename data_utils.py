@@ -1,5 +1,6 @@
 from typing import Tuple, List, Dict
 import math
+from collections import Counter
 
 import torch
 from tqdm.auto import tqdm
@@ -33,6 +34,7 @@ def load_embedding_file(
     device: torch.device = None,
     limit: int = -1,
     word_list_only: bool = False,  # Load only the list of input words.
+    words: set = None,
 ) -> Tuple[List[torch.Tensor], torch.Tensor, Dict[str, int], List[str]]:
     """
     Input: path to an embedding file.
@@ -52,32 +54,38 @@ def load_embedding_file(
         vocabulary = []
         embedding_lines = embedding_text_file.readlines()[:limit]
         embedding_dim = len(embedding_lines[0].split()) - 1
-        embeddings = torch.empty((len(embedding_lines), embedding_dim)).to(device)
+        embeddings = []
+        line_id = 0
 
-        for line_id, embedding_line in tqdm(
-            enumerate(embedding_lines), total=len(embedding_lines)
-        ):
+        for embedding_line in tqdm(embedding_lines):
             embedding_line = embedding_line.split(" ")
             word = embedding_line[0]
 
-            word_lookup[word] = line_id
-            vocabulary.append(word)
-            tokenized_word = tokenize_word(word)
-            X.append(tokenized_word)
+            if (not words) or (word in words):
+                word_lookup[word] = line_id
+                vocabulary.append(word)
 
-            if not word_list_only:
-                embedding = torch.tensor(list(map(float, embedding_line[1:]))).to(
-                    device
-                )
-                embeddings[line_id, :] = embedding
+                if not word_list_only:
+                    tokenized_word = tokenize_word(word)
+                    X.append(tokenized_word)
 
+                    embedding = torch.tensor(list(map(float, embedding_line[1:])))
+                    embeddings.append(embedding)
+
+                line_id += 1
+
+        embeddings_matrix = torch.zeros((len(embeddings), embedding_dim))
+        for line_id, embedding in enumerate(tqdm(embeddings)):
+            embeddings_matrix[line_id, :] = embedding
+
+        embeddings_matrix = embeddings_matrix.to(device)
         del embedding_lines
 
-    return X, embeddings, word_lookup, vocabulary
+    return X, embeddings_matrix, word_lookup, vocabulary
 
 
 def prepare_batch(
-    items: Dict[str, List[str]],
+    batch: List[Tuple[torch.tensor, str]],
     embeddings: torch.Tensor,
     word_lookup: Dict[str, int],
     device: torch.device = None,
@@ -85,7 +93,7 @@ def prepare_batch(
     """
     Wrapper around get_batch.
     Input:
-    - items["words"], list of words.
+    - list of (tensor, word) pairs.
     - embeddings, torch matrix of embeddings, one row for each word (num_words, d)
     - word_lookup, dictionary mapping word (str) to row number in the embedding matrix.
 
@@ -96,12 +104,11 @@ def prepare_batch(
     """
     X_items = []
     Y_items = []
-    words = items["word"]
-    for word in words:
+    for X, word in batch:
         word_embedding_key = word_lookup.get(word)
 
         if word_embedding_key:
-            word_tokenized = tokenize_word(word)
+            word_tokenized = X
             word_embedding = embeddings[word_embedding_key, :]
 
             X_items.append(word_tokenized)
@@ -255,3 +262,43 @@ def process_wikitext(examples, word_lookup: Dict[str, int]):
 
     output = {"word": word_list}
     return output
+
+
+def get_weights(
+    dataset: List[Dict[str, str]], word_list: List[str], num_processes: int = 1
+) -> List[int]:
+    """
+    Input:
+    - dataset, with each entry having a "word" as feature.
+    - word_list, list of words.
+
+    Output:
+    - weight list, ordered as in word_list.
+    """
+
+    def process_slice(dataset_slice):
+        word_counter = Counter()
+        output: List[int] = []
+        for word in dataset_slice["word"]:
+            word_counter[word] += 1
+
+        for word in word_list:
+            count = word_counter[word]
+            output.append(count)
+
+        return {"count": [np.array(output)]}
+
+    weight_slices_dataset = dataset.map(
+        process_slice,
+        batched=True,
+        remove_columns=["word"],
+        num_proc=num_processes,
+    )
+    weight_slices = []
+    for entry in tqdm(weight_slices_dataset):
+        weight_slices.append(entry["count"])
+
+    weight_slices = np.array(weight_slices)
+    weights = np.sum(weight_slices, axis=0)
+
+    return weights
