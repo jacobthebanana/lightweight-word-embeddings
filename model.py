@@ -8,16 +8,16 @@ class TransformerModel(nn.Module):
     """Container module with an encoder, a recurrent or transformer module, and a decoder."""
 
     def __init__(
-        self, input_dimension, output_dimension, nhead, nhid, nlayers, dropout=0.5
+        self, input_dimension, output_dimension, nhead, nlayers, dropout=0.5
     ):
         super(TransformerModel, self).__init__()
         self.model_type = "Transformer"
         self.input_attention_layers = TransformerEncoder(
             [
                 TransformerEncoderLayer(
-                    AttentionLayer(FullAttention(), input_dimension, 12),
+                    AttentionLayer(FullAttention(), input_dimension, nhead),
                     input_dimension,
-                    12,
+                    nhead,
                     activation="gelu",
                 )
             ],
@@ -28,12 +28,14 @@ class TransformerModel(nn.Module):
             [
                 TransformerEncoderLayer(
                     AttentionLayer(
-                        LinearAttention(query_dimensions=128), output_dimension, 12
+                        FullAttention(), output_dimension, nhead
                     ),
                     output_dimension,
-                    12,
+                    nhead,
                     activation="gelu",
+                    dropout=dropout,
                 )
+                for _ in range(nlayers)
             ],
             norm_layer=torch.nn.LayerNorm(output_dimension),
         )
