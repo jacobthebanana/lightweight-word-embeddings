@@ -15,25 +15,31 @@ import data_utils
 parser = argparse.ArgumentParser("Evaluate embedding quality.")
 parser.add_argument("embedding_file")
 parser.add_argument("question_words_list")
-parser.add_argument("--closed", type=bool, default=False, required=False)
+parser.add_argument("--open", dest="is_open", type=bool, default=False, required=False)
 args = parser.parse_args()
 embedding_file_path = args.embedding_file
 question_words_path = args.question_words_list
-is_closed = args.closed
+is_open = args.is_open
 
 device = torch.device("cuda")
 
-question_words = set()
-with open(question_words_path, "r") as question_words_file:
-    for line in question_words_file.readlines():
-        for word in line.split(" "):
-            question_words.add(word.lower())
+if not is_open:
+    question_words = set()
+    with open(question_words_path, "r") as question_words_file:
+        for line in question_words_file.readlines():
+            for word in line.split(" "):
+                question_words.add(word.lower())
 
-_, embeddings, word_lookup, word_list = data_utils.load_embedding_file(
-    embedding_file_path,
-    device=device,
-    words=question_words,
-)
+    _, embeddings, word_lookup, word_list = data_utils.load_embedding_file(
+        embedding_file_path,
+        device=device,
+        words=question_words,
+    )
+else:
+    _, embeddings, word_lookup, word_list = data_utils.load_embedding_file(
+        embedding_file_path,
+        device=device,
+    )
 
 embeddings_norms = torch.norm(embeddings, p=2, dim=0)
 embeddings_norm_mean = torch.mean(embeddings_norms)

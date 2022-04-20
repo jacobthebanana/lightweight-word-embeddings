@@ -1,6 +1,7 @@
 from typing import Tuple, List, Dict
 import math
 from collections import Counter
+import random
 
 import torch
 from tqdm.auto import tqdm
@@ -84,43 +85,64 @@ def load_embedding_file(
     return X, embeddings_matrix, word_lookup, vocabulary
 
 
+def prepare_data(items):
+    output = []
+    window_size = 10
+
+    sentences = items["text"]
+    for sentence in sentences:
+        words = sentence.split(" ")
+        for word_index, current_word in enumerate(words):
+            if not current_word.isalpha():
+                continue
+
+            current_word_output = [current_word]
+
+            min_context_index = max(0, word_index - window_size)
+            max_context_index = min(len(words), word_index + window_size)
+
+            current_word_output.extend(words[min_context_index:max_context_index])
+
+        output.append(" ".join(current_word_output))
+
+    return {"data": output}
+
+
 def prepare_batch(
-    batch: List[Tuple[torch.tensor, str]],
-    embeddings: torch.Tensor,
+    items: Dict[str, List[str]],
     word_lookup: Dict[str, int],
+    vocabulary_size: int,
     device: torch.device = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Wrapper around get_batch.
-    Input:
-    - list of (tensor, word) pairs.
-    - embeddings, torch matrix of embeddings, one row for each word (num_words, d)
-    - word_lookup, dictionary mapping word (str) to row number in the embedding matrix.
+    Generate skipgram inputs and references.
+    - items["data"].
+    - word_lookup: dictionary mapping words to indices.
 
     Output:
-    - X_batch: 3D Tensor. (batch_size, l, 28)
-    - X_batch_padding_mask: 2D Tensor. (batch_size, l).
-    - Y_batch: 2D array. (batch_size, d).
+    - X: tokenized and padded words characters. (b x l x 28)
+    - X_length_mask: length mask. (b x l)
+    - Y: target. (b x n)
     """
-    X_items = []
-    Y_items = []
-    for X, word in batch:
-        word_embedding_key = word_lookup.get(word)
+    data_entries = items["data"]
+    X = []
+    Y = torch.zeros(len(data_entries), vocabulary_size)
 
-        if word_embedding_key:
-            word_tokenized = X
-            word_embedding = embeddings[word_embedding_key, :]
+    for data_index, data in enumerate(data_entries):
+        data = data.split(" ")
+        current_word = data[0]
+        context_words = data[1:]
 
-            X_items.append(word_tokenized)
-            Y_items.append(word_embedding)
+        word_tokenized = tokenize_word(current_word)
+        X.append(word_tokenized)
 
-    num_words = len(Y_items)
-    embedding_dimension = embeddings.shape[1]
-    Y = torch.zeros((num_words, embedding_dimension), device=device)
-    for word_index, embedding in enumerate(Y_items):
-        Y[word_index, :] = embedding
+        for context_word in context_words:
+            context_word_key = word_lookup.get(context_word)
+            if context_word_key:
+                Y[data_index, context_word_key] = 1
 
-    return get_batch(X_items, Y, start=0, batch_size=num_words, device=device)
+    Y = Y.to(device)
+    return get_batch(X, Y, start=0, batch_size=len(X), device=device)
 
 
 def get_batch(
@@ -149,6 +171,9 @@ def get_batch(
     else:  # Inference mode.
         Y_batch = None
 
+    if len(X_sliced) == 0:
+        return None, None, None
+
     embedding_dimension = X_sliced[0].shape[-1]
     max_word_length = max(map(len, X_sliced))
 
@@ -165,6 +190,10 @@ def get_batch(
 
     X_batch = X_batch.to(device)
     X_batch_mask = LengthMask(X_word_lengths, device=device)
+
+    if Y_batch is not None:
+        Y_batch = Y_batch.to(device)
+
     return X_batch, X_batch_mask, Y_batch
 
 
@@ -265,7 +294,10 @@ def process_wikitext(examples, word_lookup: Dict[str, int]):
 
 
 def get_weights(
-    dataset: List[Dict[str, str]], word_list: List[str], num_processes: int = 1
+    dataset: List[Dict[str, str]],
+    word_list: List[str],
+    word_lookup: Dict[str, int],
+    num_processes: int = 1,
 ) -> List[int]:
     """
     Input:
@@ -277,16 +309,13 @@ def get_weights(
     """
 
     def process_slice(dataset_slice):
-        word_counter = Counter()
-        output: List[int] = []
+        output = np.zeros(len(word_list), dtype=np.int32)
         for word in dataset_slice["word"]:
-            word_counter[word] += 1
+            word_key = word_lookup.get(word)
+            if word_key:
+                output[word_key] += 1
 
-        for word in word_list:
-            count = word_counter[word]
-            output.append(count)
-
-        return {"count": [np.array(output)]}
+        return {"count": [output]}
 
     weight_slices_dataset = dataset.map(
         process_slice,
@@ -294,11 +323,78 @@ def get_weights(
         remove_columns=["word"],
         num_proc=num_processes,
     )
-    weight_slices = []
+    aggregated_weights = np.zeros(len(word_list), dtype=np.int32)
     for entry in tqdm(weight_slices_dataset):
-        weight_slices.append(entry["count"])
+        weight_slice = entry["count"]
+        aggregated_weights += weight_slice
 
-    weight_slices = np.array(weight_slices)
-    weights = np.sum(weight_slices, axis=0)
+    return aggregated_weights
 
-    return weights
+
+def generate_embeddings(
+    model: torch.nn.Module,
+    tokenized_vocabulary: List[torch.tensor],
+    output_dimension: int,
+    batch_size: int = 256,
+    device: torch.device = None,
+) -> torch.tensor:
+    """
+    Evaluate model on tokenized vocabulary to obtain
+    new embeddings.
+    """
+    num_words = len(tokenized_vocabulary)
+    output = torch.empty((num_words, output_dimension), device=device)
+
+    num_iterations = math.ceil(num_words / batch_size)
+
+    model.eval()
+    for iteration in tqdm(range(num_iterations)):
+        head_index = batch_size * iteration
+        tail_index = min(num_words, (head_index + batch_size))
+        X_batch, X_length_mask, _ = get_batch(
+            tokenized_vocabulary,
+            None,  # No embedding is provided during inference.
+            start=head_index,
+            batch_size=batch_size,
+            device=device,
+        )
+
+        with torch.no_grad():
+            Y_predictions = model(X_batch, length_mask=X_length_mask)
+            output[head_index:tail_index, :] = Y_predictions
+
+    return output
+
+
+def negative_sample(
+    weights: List[int], positive: List[int], item_count: int, generator: random.Random
+) -> List[int]:
+    """
+    Negative sample.
+    """
+    items = []
+    num_choices = len(weights)
+    while len(items) < item_count:
+        item = generator.choices(range(num_choices), weights=weights)[0]
+
+        if (item not in positive) and (item not in items):
+            items.append(item)
+
+    return items
+
+
+def get_negative_sample_loss(
+    output: torch.tensor, positive: List[int], negative: List[int]
+) -> Tuple[torch.tensor, torch.tensor]:
+    all_relevant_indices = positive + negative
+    device = output.device
+    new_output = torch.zeros(len(all_relevant_indices), requires_grad=True, device=device)
+    reference = torch.zeros(len(all_relevant_indices), requires_grad=True, device=device)
+    for index in positive:
+        new_output[index] = output[index]
+        reference[index] = 1
+    for index in negative:
+        new_output[index] = output[index]
+        reference[index] = 0
+
+    return new_output, reference

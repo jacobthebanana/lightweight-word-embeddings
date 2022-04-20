@@ -10,6 +10,7 @@ class TransformerModel(nn.Module):
     def __init__(
         self,
         input_dimension,
+        hidden_dimension,
         output_dimension,
         nhead,
         nlayers,
@@ -19,40 +20,51 @@ class TransformerModel(nn.Module):
         super(TransformerModel, self).__init__()
         self.model_type = "Transformer"
         self.nlayers_input = nlayers_input
-        if nlayers_input:
-            self.input_attention_layers = TransformerEncoder(
-                [
-                    TransformerEncoderLayer(
-                        AttentionLayer(FullAttention(), input_dimension, nhead),
-                        input_dimension,
-                        nhead,
-                        activation="gelu",
-                    )
-                    for _ in range(nlayers_input)
-                ],
-                norm_layer=torch.nn.LayerNorm(input_dimension),
-            )
-        self.upscaling_layer = nn.Linear(input_dimension, output_dimension)
+        self.num_padding_dimensions = hidden_dimension - input_dimension
+        assert output_dimension >= input_dimension
         self.attention_layers = TransformerEncoder(
             [
                 TransformerEncoderLayer(
-                    AttentionLayer(FullAttention(), output_dimension, nhead),
-                    output_dimension,
+                    AttentionLayer(FullAttention(), hidden_dimension, nhead),
+                    hidden_dimension,
                     nhead,
                     activation="gelu",
                     dropout=dropout,
                 )
                 for _ in range(nlayers)
             ],
-            norm_layer=torch.nn.LayerNorm(output_dimension),
+            norm_layer=torch.nn.LayerNorm(hidden_dimension),
         )
+        self.output_layer = torch.nn.Linear(hidden_dimension, output_dimension)
 
     def forward(self, src, length_mask=None):
-        if self.nlayers_input:
-            src = self.input_attention_layers(src, length_mask=length_mask)
+        batch_size: int = src.shape[0]
+        batch_width: int = src.shape[1]
+        padding = torch.zeros(
+            (batch_size, batch_width, self.num_padding_dimensions)
+        ).to(src.device)
 
-        src = self.upscaling_layer(src)
+        src = torch.cat((src, padding), axis=2)
         output = self.attention_layers(src, length_mask=length_mask)
+
         cls_output = output[:, 0, :]  # batch, token/character, dimension
+        cls_output = self.output_layer(cls_output)
 
         return cls_output
+
+
+class TranslatorModel(nn.Module):
+    """
+    Translation layer for translating generic embeddings to GloVe embeddings.
+    """
+
+    def __init__(self, dimension, hidden_dimension):
+        super(TranslatorModel, self).__init__()
+        self.input_layer = torch.nn.Linear(dimension, hidden_dimension)
+        self.ReLU = torch.nn.ReLU()
+        self.output_layer = torch.nn.Linear(hidden_dimension, dimension)
+
+    def forward(self, x):
+        x = self.input_layer(x)
+        x = self.ReLU(x)
+        return self.output_layer(x)

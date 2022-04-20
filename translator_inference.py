@@ -10,6 +10,7 @@ import data_utils
 parser = argparse.ArgumentParser()
 parser.add_argument("word_list_file")
 parser.add_argument("model_path")
+parser.add_argument("translator_model_path")
 parser.add_argument("nhead", type=int)
 parser.add_argument("hidden_dimension", type=int)
 parser.add_argument("nlayers", type=int)
@@ -18,6 +19,7 @@ args = parser.parse_args()
 
 data_file = args.word_list_file
 state_dict_path = args.model_path
+translator_state_path = args.translator_model_path
 
 input_dimension = 28
 output_dimension = args.output_dimension
@@ -42,7 +44,8 @@ model = TransformerModel(
 
 model = model.to(device)
 model.load_state_dict(torch.load(state_dict_path))
-
+translator = torch.nn.Linear(output_dimension, output_dimension).to(device)
+translator.load_state_dict(torch.load(translator_state_path))
 
 output = torch.empty((num_words, output_dimension), device=device)
 num_iterations = math.ceil(num_words / batch_size)
@@ -61,7 +64,8 @@ for iteration in tqdm(range(num_iterations)):
     )
 
     with torch.no_grad():
-        Y_predictions = model(X_batch, length_mask=X_length_mask)
+        transformer_embeddings = model(X_batch, length_mask=X_length_mask)
+        Y_predictions = translator(transformer_embeddings)
         output[head_index:tail_index, :] = Y_predictions
 
 
